@@ -68,13 +68,13 @@ def get_session():
 # ---------------------------------------------------------------------------
 
 CATEGORIES = {
-    "health": {"label": "Gesundheit", "icon": "favorite"},
-    "learning": {"label": "Lernen", "icon": "school"},
-    "fitness": {"label": "Fitness", "icon": "fitness_center"},
-    "mindfulness": {"label": "Achtsamkeit", "icon": "self_improvement"},
-    "productivity": {"label": "Produktivität", "icon": "task_alt"},
-    "social": {"label": "Sozial", "icon": "groups"},
-    "other": {"label": "Sonstiges", "icon": "star"},
+    "health": {"label": "Gesundheit", "icon": "favorite", "color": "#E85D75"},
+    "learning": {"label": "Lernen", "icon": "school", "color": "#3D7BFD"},
+    "fitness": {"label": "Fitness", "icon": "fitness_center", "color": "#FF8C42"},
+    "mindfulness": {"label": "Achtsamkeit", "icon": "self_improvement", "color": "#6C5CE7"},
+    "productivity": {"label": "Produktivität", "icon": "task_alt", "color": "#00B894"},
+    "social": {"label": "Sozial", "icon": "groups", "color": "#FDA7DF"},
+    "other": {"label": "Sonstiges", "icon": "star", "color": "#95A5A6"},
 }
 
 # ---------------------------------------------------------------------------
@@ -164,6 +164,31 @@ class PointsLog(SQLModel, table=True):
     user_id: int = Field(foreign_key="user.id", index=True)
     points: int
     earned_on: date
+
+
+class Category(SQLModel, table=True):
+    """Eigene, vom Nutzer angelegte Kategorien (zusätzlich zu den fest
+    eingebauten CATEGORIES oben). Jede gehört genau einem Nutzer."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    key: str = Field(index=True)  # z.B. "custom_3" - intern eindeutig
+    label: str
+    icon: str = "star"
+    color: str = "#95A5A6"
+
+
+class CategoryCreate(SQLModel):
+    label: str
+    icon: str = "star"
+    color: str = "#95A5A6"
+
+
+class CategoryOut(SQLModel):
+    key: str
+    label: str
+    icon: str
+    color: str
+    custom: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -444,12 +469,93 @@ def read_current_user(current_user: User = Depends(get_current_user)):
 
 
 # ---------------------------------------------------------------------------
-# Kategorien-Endpunkt
+# Kategorien-Endpunkte (feste Kategorien + eigene, pro Nutzer anlegbare)
 # ---------------------------------------------------------------------------
 
-@app.get("/categories")
-def list_categories():
-    return CATEGORIES
+@app.get("/categories", response_model=List[CategoryOut])
+def list_categories(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    result = [
+        CategoryOut(key=key, label=info["label"], icon=info["icon"], color=info["color"], custom=False)
+        for key, info in CATEGORIES.items()
+    ]
+    own = session.exec(select(Category).where(Category.user_id == current_user.id)).all()
+    result += [
+        CategoryOut(key=c.key, label=c.label, icon=c.icon, color=c.color, custom=True) for c in own
+    ]
+    return result
+
+
+@app.post("/categories", response_model=CategoryOut)
+def create_category(
+    data: CategoryCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    label = data.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="Name darf nicht leer sein")
+    # eindeutigen internen Key erzeugen (z.B. "custom_7")
+    existing_count = session.exec(
+        select(Category).where(Category.user_id == current_user.id)
+    ).all()
+    key = f"custom_{current_user.id}_{len(existing_count) + 1}_{secrets.token_hex(2)}"
+    category = Category(user_id=current_user.id, key=key, label=label, icon=data.icon, color=data.color)
+    session.add(category)
+    session.commit()
+    session.refresh(category)
+    return CategoryOut(key=category.key, label=category.label, icon=category.icon, color=category.color, custom=True)
+
+
+def _get_owned_category(key: str, session: Session, current_user: User) -> Category:
+    category = session.exec(
+        select(Category).where(Category.key == key, Category.user_id == current_user.id)
+    ).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Kategorie nicht gefunden")
+    return category
+
+
+@app.patch("/categories/{key}", response_model=CategoryOut)
+def update_category(
+    key: str,
+    data: CategoryCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    category = _get_owned_category(key, session, current_user)
+    label = data.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="Name darf nicht leer sein")
+    category.label = label
+    category.icon = data.icon
+    category.color = data.color
+    session.add(category)
+    session.commit()
+    session.refresh(category)
+    return CategoryOut(key=category.key, label=category.label, icon=category.icon, color=category.color, custom=True)
+
+
+@app.delete("/categories/{key}")
+def delete_category(
+    key: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    category = _get_owned_category(key, session, current_user)
+    # Habits, die diese Kategorie nutzen, fallen auf "Sonstiges" zurück,
+    # damit sie nicht mit einer nicht mehr existierenden Kategorie verwaist.
+    habits = session.exec(
+        select(Habit).where(Habit.user_id == current_user.id, Habit.category == key)
+    ).all()
+    for habit in habits:
+        habit.category = "other"
+        session.add(habit)
+    session.delete(category)
+    session.commit()
+    return {"ok": True, "habits_reassigned": len(habits)}
 
 
 # ---------------------------------------------------------------------------
@@ -1106,6 +1212,139 @@ def delete_account(
     session.delete(current_user)
     session.commit()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Backup & Wiederherstellung
+# ---------------------------------------------------------------------------
+# Da die Daten sowieso live in der Cloud-Datenbank liegen, ist das hier vor
+# allem eine zusätzliche Sicherheit (z.B. vor "Konto löschen", oder um Daten
+# manuell auf ein neues Konto zu übertragen). Kein Datei-Download nötig -
+# genau wie beim CSV-Export wird JSON-Text zum Kopieren angeboten.
+
+class BackupHabit(SQLModel):
+    title: str
+    category: str
+    icon: Optional[str] = None
+    color: Optional[str] = None
+    reminder_time: Optional[str] = None
+    active_weekdays: Optional[List[int]] = None
+    current_streak: int = 0
+    best_streak: int = 0
+    last_completed: Optional[date] = None
+    completed_on: List[str] = []  # ISO-Daten aller Erledigungen
+
+
+class BackupCategory(SQLModel):
+    key: str
+    label: str
+    icon: str
+    color: str
+
+
+class BackupData(SQLModel):
+    version: int = 1
+    points: int = 0
+    streak_freezes_available: int = 1
+    freezes_used_count: int = 0
+    total_habits_created: int = 0
+    categories: List[BackupCategory] = []
+    habits: List[BackupHabit] = []
+
+
+@app.get("/backup/export", response_model=BackupData)
+def export_backup(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    habits = session.exec(select(Habit).where(Habit.user_id == current_user.id)).all()
+    own_categories = session.exec(select(Category).where(Category.user_id == current_user.id)).all()
+
+    backup_habits = []
+    for habit in habits:
+        logs = session.exec(select(HabitLog).where(HabitLog.habit_id == habit.id)).all()
+        backup_habits.append(BackupHabit(
+            title=habit.title,
+            category=habit.category,
+            icon=habit.icon,
+            color=habit.color,
+            reminder_time=habit.reminder_time,
+            active_weekdays=_parse_weekdays(habit.active_weekdays),
+            current_streak=habit.current_streak,
+            best_streak=habit.best_streak,
+            last_completed=habit.last_completed,
+            completed_on=[log.completed_on.isoformat() for log in logs],
+        ))
+
+    return BackupData(
+        points=current_user.points,
+        streak_freezes_available=current_user.streak_freezes_available,
+        freezes_used_count=current_user.freezes_used_count,
+        total_habits_created=current_user.total_habits_created,
+        categories=[
+            BackupCategory(key=c.key, label=c.label, icon=c.icon, color=c.color) for c in own_categories
+        ],
+        habits=backup_habits,
+    )
+
+
+@app.post("/backup/import")
+def import_backup(
+    data: BackupData,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Ersetzt ALLE aktuellen Habits, eigenen Kategorien und Punkte des
+    Nutzers durch den Inhalt des Backups. Das ist bewusst ein vollständiges
+    Wiederherstellen (kein Zusammenführen), damit das Ergebnis vorhersehbar
+    bleibt - die App warnt den Nutzer davor, bevor sie diesen Endpunkt ruft."""
+    # Bestehende Habits (inkl. Verlauf) löschen
+    existing_habits = session.exec(select(Habit).where(Habit.user_id == current_user.id)).all()
+    for habit in existing_habits:
+        logs = session.exec(select(HabitLog).where(HabitLog.habit_id == habit.id)).all()
+        for log in logs:
+            session.delete(log)
+        session.delete(habit)
+
+    # Bestehende eigene Kategorien löschen
+    existing_categories = session.exec(select(Category).where(Category.user_id == current_user.id)).all()
+    for category in existing_categories:
+        session.delete(category)
+    session.commit()
+
+    # Eigene Kategorien wiederherstellen
+    for cat in data.categories:
+        session.add(Category(user_id=current_user.id, key=cat.key, label=cat.label, icon=cat.icon, color=cat.color))
+
+    # Habits + Verlauf wiederherstellen
+    for h in data.habits:
+        habit = Habit(
+            user_id=current_user.id,
+            title=h.title,
+            category=h.category,
+            icon=h.icon,
+            color=h.color,
+            reminder_time=h.reminder_time,
+            active_weekdays=_weekdays_to_str(h.active_weekdays),
+            current_streak=h.current_streak,
+            best_streak=h.best_streak,
+            last_completed=h.last_completed,
+        )
+        session.add(habit)
+        session.commit()
+        session.refresh(habit)
+        for completed_on in h.completed_on:
+            session.add(HabitLog(habit_id=habit.id, completed_on=date.fromisoformat(completed_on)))
+
+    # Nutzer-Statistiken wiederherstellen
+    current_user.points = data.points
+    current_user.streak_freezes_available = data.streak_freezes_available
+    current_user.freezes_used_count = data.freezes_used_count
+    current_user.total_habits_created = data.total_habits_created
+    session.add(current_user)
+    session.commit()
+
+    return {"ok": True, "habits_restored": len(data.habits)}
 
 
 @app.get("/")
