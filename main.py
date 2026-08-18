@@ -117,6 +117,7 @@ class Habit(SQLModel, table=True):
     category: str = "other"
     icon: Optional[str] = None  # z.B. "fitness_center". None = Kategorie-Icon verwenden
     color: Optional[str] = None  # Hex-Code z.B. "#8B5CF6". None = Kategorie-Farbe verwenden
+    notes: Optional[str] = None  # Freitext-Notiz des Nutzers zu diesem Habit
     reminder_time: Optional[str] = None  # Format "HH:MM", z.B. "08:30". None = keine Erinnerung
     # Komma-getrennte Wochentage, an denen das Habit ansteht (1=Montag..7=Sonntag).
     # Leer/None = jeden Tag (Standard-Verhalten wie bisher).
@@ -132,6 +133,7 @@ class HabitCreate(SQLModel):
     category: str = "other"
     icon: Optional[str] = None
     color: Optional[str] = None
+    notes: Optional[str] = None
     reminder_time: Optional[str] = None
     active_weekdays: Optional[List[int]] = None
 
@@ -142,6 +144,7 @@ class HabitRead(SQLModel):
     category: str
     icon: Optional[str]
     color: Optional[str]
+    notes: Optional[str] = None
     reminder_time: Optional[str]
     active_weekdays: Optional[List[int]]
     current_streak: int
@@ -263,6 +266,7 @@ def _to_read_model(habit: Habit) -> HabitRead:
         category=habit.category,
         icon=habit.icon,
         color=habit.color,
+        notes=habit.notes,
         reminder_time=habit.reminder_time,
         active_weekdays=_parse_weekdays(habit.active_weekdays),
         current_streak=habit.current_streak,
@@ -582,6 +586,7 @@ def create_habit(
         category=data.category,
         icon=data.icon,
         color=data.color,
+        notes=data.notes,
         reminder_time=data.reminder_time,
         active_weekdays=_weekdays_to_str(data.active_weekdays),
         user_id=current_user.id,
@@ -608,6 +613,8 @@ class HabitUpdate(SQLModel):
     clear_icon: bool = False  # explizit auf Kategorie-Icon zurücksetzen
     color: Optional[str] = None
     clear_color: bool = False  # explizit auf Kategorie-Farbe zurücksetzen
+    notes: Optional[str] = None
+    clear_notes: bool = False  # explizit Notiz löschen
     reminder_time: Optional[str] = None
     clear_reminder: bool = False  # explizit auf "keine Erinnerung" setzen
     active_weekdays: Optional[List[int]] = None
@@ -635,6 +642,10 @@ def update_habit(
         habit.color = None
     elif data.color is not None:
         habit.color = data.color
+    if data.clear_notes:
+        habit.notes = None
+    elif data.notes is not None:
+        habit.notes = data.notes
     if data.clear_reminder:
         habit.reminder_time = None
     elif data.reminder_time is not None:
@@ -1227,6 +1238,7 @@ class BackupHabit(SQLModel):
     category: str
     icon: Optional[str] = None
     color: Optional[str] = None
+    notes: Optional[str] = None
     reminder_time: Optional[str] = None
     active_weekdays: Optional[List[int]] = None
     current_streak: int = 0
@@ -1268,6 +1280,7 @@ def export_backup(
             category=habit.category,
             icon=habit.icon,
             color=habit.color,
+            notes=habit.notes,
             reminder_time=habit.reminder_time,
             active_weekdays=_parse_weekdays(habit.active_weekdays),
             current_streak=habit.current_streak,
@@ -1324,6 +1337,7 @@ def import_backup(
             category=h.category,
             icon=h.icon,
             color=h.color,
+            notes=h.notes,
             reminder_time=h.reminder_time,
             active_weekdays=_weekdays_to_str(h.active_weekdays),
             current_streak=h.current_streak,
