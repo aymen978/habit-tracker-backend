@@ -673,6 +673,11 @@ def delete_habit(
     logs = session.exec(select(HabitLog).where(HabitLog.habit_id == habit_id)).all()
     for log in logs:
         session.delete(log)
+    # WICHTIG: flush() zwingt die Log-Löschungen JETZT auszuführen, bevor wir
+    # das Habit selbst löschen. Ohne das kann die Datenbank beide Löschungen
+    # in der falschen Reihenfolge verarbeiten (Habit vor den Logs) und dann
+    # mit einem Fremdschlüssel-Fehler abbrechen.
+    session.flush()
     session.delete(habit)
     session.commit()
     return {"ok": True}
