@@ -668,6 +668,11 @@ def delete_habit(
     current_user: User = Depends(get_current_user),
 ):
     habit = _get_owned_habit(habit_id, session, current_user)
+    # Erst alle "erledigt am X"-Einträge zu diesem Habit löschen - sonst
+    # verweigert die Datenbank das Löschen des Habits selbst (Fremdschlüssel).
+    logs = session.exec(select(HabitLog).where(HabitLog.habit_id == habit_id)).all()
+    for log in logs:
+        session.delete(log)
     session.delete(habit)
     session.commit()
     return {"ok": True}
