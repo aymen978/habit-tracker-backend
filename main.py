@@ -13,9 +13,11 @@ API-Doku: http://127.0.0.1:8000/docs
 from datetime import date, datetime, timedelta
 from typing import Optional, List
 import os
+import json
 import secrets
 import smtplib
 from email.mime.text import MIMEText
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +25,9 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlmodel import SQLModel, Field, create_engine, Session, select
 from passlib.context import CryptContext
 from jose import JWTError, jwt
+import firebase_admin
+from firebase_admin import credentials, messaging
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # ---------------------------------------------------------------------------
 # Konfiguration
@@ -94,6 +99,10 @@ class User(SQLModel, table=True):
     last_freeze_refill: date = Field(default_factory=date.today)
     total_habits_created: int = 0  # Lifetime-Zähler, sinkt nicht beim Löschen (für "Zielstrebig")
     last_all_done_bonus_date: Optional[date] = None  # verhindert Mehrfach-Bonus am selben Tag
+    # Push-Token des Geräts (von Firebase Cloud Messaging). Wird beim App-Start
+    # gesetzt/aktualisiert. None = Nutzer hat sich noch nie mit Push-Empfang
+    # angemeldet (z.B. alte App-Version, oder Berechtigung abgelehnt).
+    fcm_token: Optional[str] = None
 
 
 class UserCreate(SQLModel):
@@ -249,10 +258,94 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------------------------------------------------------------------
+# Push-Benachrichtigungen (Firebase Cloud Messaging)
+# ---------------------------------------------------------------------------
+# Die Dienstkonto-Zugangsdaten kommen als kompletter JSON-Inhalt aus der
+# Umgebungsvariable FIREBASE_CREDENTIALS_JSON (bei Railway unter
+# "Variables" eintragen - kompletten Inhalt der heruntergeladenen
+# Firebase-Schlüsseldatei reinkopieren). Läuft nichts, wenn die Variable
+# fehlt (z.B. lokal beim Testen), damit die App trotzdem startet.
+_firebase_ready = False
+_raw_firebase_creds = os.environ.get("FIREBASE_CREDENTIALS_JSON")
+if _raw_firebase_creds:
+    try:
+        cred = credentials.Certificate(json.loads(_raw_firebase_creds))
+        firebase_admin.initialize_app(cred)
+        _firebase_ready = True
+    except Exception as exc:  # noqa: BLE001 - beim Start nur loggen, nicht abstürzen
+        print(f"Firebase-Initialisierung fehlgeschlagen: {exc}")
+
+
+def _send_push(token: str, title: str, body: str) -> bool:
+    """Verschickt eine einzelne Push-Benachrichtigung. Gibt False zurück
+    (statt einen Fehler zu werfen), falls Firebase nicht eingerichtet ist
+    oder der Versand fehlschlägt (z.B. Token ungültig/App deinstalliert)."""
+    if not _firebase_ready or not token:
+        return False
+    try:
+        messaging.send(
+            messaging.Message(
+                token=token,
+                notification=messaging.Notification(title=title, body=body),
+                android=messaging.AndroidConfig(priority="high"),
+            )
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"Push-Versand fehlgeschlagen: {exc}")
+        return False
+
+
+# Gleiche Zeitzone wie bisher in der App (Europe/Berlin) - wichtig, weil
+# Railway-Server standardmäßig in UTC laufen.
+_BERLIN_TZ = ZoneInfo("Europe/Berlin")
+# Merkt sich pro Minute, welche Habit-IDs schon benachrichtigt wurden, damit
+# bei überlappenden Job-Läufen keine Doppel-Push verschickt wird. Wird
+# einfach im Arbeitsspeicher gehalten - reicht für diesen Zweck völlig.
+_already_notified_this_minute: set[tuple[int, str]] = set()
+
+
+def _check_and_send_reminders():
+    """Läuft jede Minute: sucht alle Habits, deren Erinnerungszeit genau
+    jetzt ist, und schickt eine Push-Benachrichtigung an den Besitzer."""
+    now = datetime.now(_BERLIN_TZ)
+    current_hhmm = now.strftime("%H:%M")
+    minute_key = now.strftime("%Y-%m-%d %H:%M")
+
+    with Session(engine) as session:
+        habits = session.exec(
+            select(Habit).where(Habit.reminder_time == current_hhmm)
+        ).all()
+        for habit in habits:
+            dedupe_key = (habit.id, minute_key)
+            if dedupe_key in _already_notified_this_minute:
+                continue
+            user = session.get(User, habit.user_id)
+            if user is None or not user.fcm_token:
+                continue
+            sent = _send_push(
+                user.fcm_token,
+                f"Zeit für: {habit.title}",
+                "Nicht vergessen – trag dir den Erfolg heute ein! 🔥",
+            )
+            if sent:
+                _already_notified_this_minute.add(dedupe_key)
+
+    # Aufräumen: alte Minuten-Einträge nicht ewig behalten (Speicher sparen).
+    if len(_already_notified_this_minute) > 500:
+        _already_notified_this_minute.clear()
+
+
+scheduler = BackgroundScheduler(timezone=str(_BERLIN_TZ))
+scheduler.add_job(_check_and_send_reminders, "interval", seconds=60, id="reminder_check")
+
 
 @app.on_event("startup")
 def on_startup():
     SQLModel.metadata.create_all(engine)
+    if not scheduler.running:
+        scheduler.start()
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +563,25 @@ def reset_password(data: ResetPasswordRequest, session: Session = Depends(get_se
 @app.get("/auth/me")
 def read_current_user(current_user: User = Depends(get_current_user)):
     return {"id": current_user.id, "username": current_user.username}
+
+
+class FcmTokenUpdate(SQLModel):
+    token: str
+
+
+@app.post("/users/me/fcm-token")
+def update_fcm_token(
+    data: FcmTokenUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Speichert/aktualisiert den Push-Token des aktuellen Geräts. Wird von
+    der App bei jedem Start aufgerufen (Token kann sich ändern, z.B. nach
+    Neuinstallation)."""
+    current_user.fcm_token = data.token
+    session.add(current_user)
+    session.commit()
+    return {"message": "Push-Token gespeichert"}
 
 
 # ---------------------------------------------------------------------------
