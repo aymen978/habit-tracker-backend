@@ -346,6 +346,10 @@ def _check_and_send_reminders():
         _already_notified_this_minute.clear()
 
 
+scheduler = BackgroundScheduler(timezone=str(_BERLIN_TZ))
+scheduler.add_job(_check_and_send_reminders, "interval", seconds=60, id="reminder_check")
+
+
 # ---------------------------------------------------------------------------
 # Wochenrückblick / "Insights" - KEIN echtes KI-Modell, sondern echte
 # Datenbank-Auswertung + eine Bibliothek vorformulierter Textvarianten.
