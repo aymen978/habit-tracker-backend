@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional, List
 import os
 import json
+import random
 import secrets
 import smtplib
 from email.mime.text import MIMEText
@@ -103,6 +104,14 @@ class User(SQLModel, table=True):
     # gesetzt/aktualisiert. None = Nutzer hat sich noch nie mit Push-Empfang
     # angemeldet (z.B. alte App-Version, oder Berechtigung abgelehnt).
     fcm_token: Optional[str] = None
+    # Sprache für automatisch generierte Texte (Insights). Die App speichert
+    # die Sprachwahl bisher nur lokal auf dem Gerät - der Server braucht sie
+    # separat, um serverseitig generierte Texte in der richtigen Sprache zu
+    # erstellen. "de" als Standard, da das die App-Standardsprache ist.
+    preferred_language: str = "de"
+    # Zuletzt generierter Wochenrückblick-Text (siehe _generate_weekly_insights).
+    latest_insight: Optional[str] = None
+    latest_insight_generated_at: Optional[date] = None
 
 
 class UserCreate(SQLModel):
@@ -337,8 +346,188 @@ def _check_and_send_reminders():
         _already_notified_this_minute.clear()
 
 
-scheduler = BackgroundScheduler(timezone=str(_BERLIN_TZ))
-scheduler.add_job(_check_and_send_reminders, "interval", seconds=60, id="reminder_check")
+# ---------------------------------------------------------------------------
+# Wochenrückblick / "Insights" - KEIN echtes KI-Modell, sondern echte
+# Datenbank-Auswertung + eine Bibliothek vorformulierter Textvarianten.
+# Bewusste Design-Entscheidung: kleine Sprachmodelle sind bei echter
+# Statistik unzuverlässig, deshalb übernimmt Python die Analyse und wählt
+# nur passend aus vorgeschriebenen, mehrsprachigen Textbausteinen aus.
+# ---------------------------------------------------------------------------
+
+_INSIGHT_TEMPLATES = {
+    "de": {
+        "perfect_week": [
+            "Perfekte Woche! Du hast alle deine Habits an jedem geplanten Tag geschafft. 🏆",
+            "Makellos! 100% diese Woche – besser geht's nicht. 🔥",
+        ],
+        "trend_up": [
+            "Starke Woche! Deine Abschlussrate ist von {prev}% auf {curr}% gestiegen. 📈",
+            "Aufwärtstrend: {curr}% diese Woche, {prev}% letzte Woche – weiter so!",
+        ],
+        "trend_down": [
+            "Diese Woche lief's etwas ruhiger ({curr}% statt {prev}%) – kein Problem, nächste Woche geht's weiter.",
+            "Von {prev}% auf {curr}% – jeder hat mal eine schwächere Woche. Dranbleiben zählt.",
+        ],
+        "weekday_pattern": [
+            "{weekday} scheinen bei dir schwieriger zu sein als andere Tage – vielleicht hilft eine Erinnerung zu einer anderen Uhrzeit?",
+            "Auffällig: An {weekday} hakst du am seltensten ab. Wert, mal drüber nachzudenken.",
+        ],
+        "streak_highlight": [
+            "Dein Streak bei „{habit}“ steht bei {streak} Tagen – stark!",
+            "{streak} Tage am Stück bei „{habit}“ – beeindruckend.",
+        ],
+        "default": [
+            "Du bist dabei – jeder abgehakte Tag zählt. Weiter so!",
+            "Kontinuität schlägt Perfektion. Mach einfach weiter.",
+        ],
+    },
+    "en": {
+        "perfect_week": [
+            "Perfect week! You completed every scheduled habit every day. 🏆",
+            "Flawless – 100% this week. Can't do better than that. 🔥",
+        ],
+        "trend_up": [
+            "Great week! Your completion rate went from {prev}% to {curr}%. 📈",
+            "Trending up: {curr}% this week vs {prev}% last week – keep it up!",
+        ],
+        "trend_down": [
+            "A quieter week ({curr}% vs {prev}%) – no worries, next week's a fresh start.",
+            "From {prev}% to {curr}% – everyone has an off week. Showing up is what counts.",
+        ],
+        "weekday_pattern": [
+            "{weekday}s seem tougher for you than other days – maybe a different reminder time would help?",
+            "Noticed: you complete habits least often on {weekday}s. Worth a thought.",
+        ],
+        "streak_highlight": [
+            "Your streak on \"{habit}\" is at {streak} days – strong!",
+            "{streak} days in a row on \"{habit}\" – impressive.",
+        ],
+        "default": [
+            "You're showing up – every completed day counts. Keep going!",
+            "Consistency beats perfection. Just keep going.",
+        ],
+    },
+}
+
+_WEEKDAY_NAMES = {
+    "de": ["Montage", "Dienstage", "Mittwoche", "Donnerstage", "Freitage", "Samstage", "Sonntage"],
+    "en": ["Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"],
+}
+
+
+def _possible_days_for_habit(habit: "Habit", start: date, end: date) -> int:
+    """Zählt, an wie vielen Tagen im Zeitraum dieses Habit überhaupt fällig
+    war (berücksichtigt Erstelldatum und feste Wochentage, falls gesetzt)."""
+    active_days = None
+    if habit.active_weekdays:
+        active_days = {int(x) for x in habit.active_weekdays.split(",") if x}
+    count = 0
+    d = max(start, habit.created_at.date())
+    while d <= end:
+        if active_days is None or d.isoweekday() in active_days:
+            count += 1
+        d += timedelta(days=1)
+    return count
+
+
+def _generate_insight_for_user(user: "User", session: Session) -> Optional[str]:
+    lang = user.preferred_language if user.preferred_language in ("de", "en") else "en"
+    templates = _INSIGHT_TEMPLATES[lang]
+    weekday_names = _WEEKDAY_NAMES[lang]
+
+    today = date.today()
+    week_start = today - timedelta(days=6)
+    prev_week_start = week_start - timedelta(days=7)
+    prev_week_end = week_start - timedelta(days=1)
+
+    habits = session.exec(select(Habit).where(Habit.user_id == user.id)).all()
+    if not habits:
+        return None
+    habit_ids = [h.id for h in habits]
+
+    logs_this_week = session.exec(
+        select(HabitLog).where(
+            HabitLog.habit_id.in_(habit_ids),
+            HabitLog.completed_on >= week_start,
+            HabitLog.completed_on <= today,
+        )
+    ).all()
+    logs_prev_week = session.exec(
+        select(HabitLog).where(
+            HabitLog.habit_id.in_(habit_ids),
+            HabitLog.completed_on >= prev_week_start,
+            HabitLog.completed_on <= prev_week_end,
+        )
+    ).all()
+
+    possible_this = sum(_possible_days_for_habit(h, week_start, today) for h in habits)
+    possible_prev = sum(_possible_days_for_habit(h, prev_week_start, prev_week_end) for h in habits)
+    rate_this = round((len(logs_this_week) / possible_this) * 100) if possible_this else 0
+    rate_prev = round((len(logs_prev_week) / possible_prev) * 100) if possible_prev else None
+
+    # Wochentag mit den wenigsten Abschlüssen finden (nur relevant, wenn
+    # genug Daten da sind und es einen klaren "schwächsten" Tag gibt).
+    weekday_counts = [0] * 7  # Index 0 = Montag
+    for log in logs_this_week:
+        weekday_counts[log.completed_on.isoweekday() - 1] += 1
+    weakest_weekday = None
+    if sum(weekday_counts) >= 4:  # nur bei ausreichend Datenpunkten werten
+        min_count = min(weekday_counts)
+        max_count = max(weekday_counts)
+        if max_count > 0 and min_count < max_count:
+            weakest_weekday = weekday_counts.index(min_count)
+
+    best_habit = max(habits, key=lambda h: h.current_streak, default=None)
+    best_streak = best_habit.current_streak if best_habit else 0
+
+    # Auswahl-Priorität: das auffälligste/positivste Muster gewinnt.
+    category = "default"
+    if possible_this > 0 and len(logs_this_week) >= possible_this:
+        category = "perfect_week"
+    elif best_streak >= 7:
+        category = "streak_highlight"
+    elif rate_prev is not None and rate_this - rate_prev >= 10:
+        category = "trend_up"
+    elif rate_prev is not None and rate_prev - rate_this >= 10:
+        category = "trend_down"
+    elif weakest_weekday is not None:
+        category = "weekday_pattern"
+
+    text = random.choice(templates[category])
+    return text.format(
+        curr=rate_this,
+        prev=rate_prev if rate_prev is not None else rate_this,
+        habit=best_habit.title if best_habit else "",
+        streak=best_streak,
+        weekday=weekday_names[weakest_weekday] if weakest_weekday is not None else "",
+    )
+
+
+def _generate_weekly_insights():
+    """Läuft einmal täglich: prüft pro Nutzer, ob der letzte Wochenrückblick
+    7+ Tage her ist (oder noch nie erstellt wurde), und generiert ggf. einen
+    neuen."""
+    today = date.today()
+    with Session(engine) as session:
+        users = session.exec(select(User)).all()
+        for user in users:
+            needs_generation = (
+                user.latest_insight_generated_at is None
+                or (today - user.latest_insight_generated_at).days >= 7
+            )
+            if not needs_generation:
+                continue
+            text = _generate_insight_for_user(user, session)
+            if text:
+                user.latest_insight = text
+                user.latest_insight_generated_at = today
+                session.add(user)
+        session.commit()
+
+
+scheduler.add_job(
+    _generate_weekly_insights, "cron", hour=6, minute=0, id="weekly_insights"
+)
 
 
 @app.on_event("startup")
@@ -582,6 +771,34 @@ def update_fcm_token(
     session.add(current_user)
     session.commit()
     return {"message": "Push-Token gespeichert"}
+
+
+class LanguageUpdate(SQLModel):
+    language: str
+
+
+@app.post("/users/me/language")
+def update_preferred_language(
+    data: LanguageUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Speichert die App-Sprache des Nutzers auf dem Server - nötig, damit
+    serverseitig generierte Texte (Insights) in der richtigen Sprache
+    erstellt werden."""
+    current_user.preferred_language = data.language
+    session.add(current_user)
+    session.commit()
+    return {"message": "Sprache gespeichert"}
+
+
+@app.get("/insights/latest")
+def get_latest_insight(current_user: User = Depends(get_current_user)):
+    """Gibt den zuletzt generierten Wochenrückblick zurück, falls vorhanden."""
+    return {
+        "message": current_user.latest_insight,
+        "generated_at": current_user.latest_insight_generated_at,
+    }
 
 
 # ---------------------------------------------------------------------------
