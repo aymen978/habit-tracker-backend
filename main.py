@@ -805,6 +805,27 @@ def get_latest_insight(current_user: User = Depends(get_current_user)):
     }
 
 
+@app.post("/insights/generate-now")
+def generate_insight_now(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """TEMPORÄR zum Testen: erzeugt sofort einen neuen Wochenrückblick,
+    ohne auf den täglichen 6-Uhr-Hintergrund-Job zu warten. Vor der
+    Veröffentlichung wieder entfernen (siehe reminders_screen.dart-Vorbild)."""
+    text = _generate_insight_for_user(current_user, session)
+    if text is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Noch keine Habits vorhanden - lege mindestens ein Habit an, bevor du testest.",
+        )
+    current_user.latest_insight = text
+    current_user.latest_insight_generated_at = date.today()
+    session.add(current_user)
+    session.commit()
+    return {"message": current_user.latest_insight, "generated_at": current_user.latest_insight_generated_at}
+
+
 # ---------------------------------------------------------------------------
 # Kategorien-Endpunkte (feste Kategorien + eigene, pro Nutzer anlegbare)
 # ---------------------------------------------------------------------------
