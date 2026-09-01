@@ -417,11 +417,119 @@ _INSIGHT_TEMPLATES = {
             "Consistency beats perfection. Just keep going.",
         ],
     },
+    "fr": {
+        "perfect_week": [
+            "Semaine parfaite ! Tu as complété toutes tes habitudes chaque jour prévu. 🏆",
+            "Sans faute ! 100% cette semaine, difficile de faire mieux. 🔥",
+        ],
+        "trend_up": [
+            "Belle semaine ! Ton taux de réussite est passé de {prev}% à {curr}%. 📈",
+            "En hausse : {curr}% cette semaine contre {prev}% la semaine dernière, continue comme ça !",
+        ],
+        "trend_down": [
+            "Une semaine plus calme ({curr}% au lieu de {prev}%) – pas de souci, la semaine prochaine repart à zéro.",
+            "De {prev}% à {curr}% – tout le monde a une semaine moins bonne. L'important, c'est de continuer.",
+        ],
+        "weekday_pattern": [
+            "Le {weekday} semble plus difficile pour toi que les autres jours – un rappel à une autre heure aiderait peut-être ?",
+            "On remarque que tu termines le moins souvent tes habitudes le {weekday}. Ça vaut le coup d'y réfléchir.",
+        ],
+        "streak_highlight": [
+            "Ta série pour « {habit} » est à {streak} jours – impressionnant !",
+            "{streak} jours d'affilée pour « {habit} » – bravo !",
+        ],
+        "default": [
+            "Tu es sur la bonne voie – chaque jour compte. Continue comme ça !",
+            "La régularité vaut mieux que la perfection. Continue, tout simplement.",
+        ],
+    },
+    "ar": {
+        "perfect_week": [
+            "أسبوع مثالي! أنجزت جميع عاداتك في كل يوم مقرر. 🏆",
+            "بلا أخطاء! نسبة إنجاز 100% هذا الأسبوع – لا يمكن أن يكون أفضل من ذلك. 🔥",
+        ],
+        "trend_up": [
+            "أسبوع رائع! ارتفع معدل إنجازك من {prev}% إلى {curr}%. 📈",
+            "اتجاه تصاعدي: {curr}% هذا الأسبوع مقابل {prev}% الأسبوع الماضي – واصل هكذا!",
+        ],
+        "trend_down": [
+            "أسبوع أهدأ قليلاً ({curr}% بدلاً من {prev}%) – لا بأس، الأسبوع القادم بداية جديدة.",
+            "من {prev}% إلى {curr}% – يمر الجميع بأسبوع أضعف أحياناً. الأهم هو الاستمرار.",
+        ],
+        "weekday_pattern": [
+            "يبدو أن {weekday} أصعب بالنسبة لك من الأيام الأخرى – ربما يساعد تذكير في وقت مختلف؟",
+            "لاحظنا أنك تنجز عاداتك بشكل أقل في {weekday}. يستحق التفكير.",
+        ],
+        "streak_highlight": [
+            "سلسلتك في «{habit}» وصلت إلى {streak} يوماً – رائع!",
+            "{streak} يوماً متتالياً في «{habit}» – مثير للإعجاب.",
+        ],
+        "default": [
+            "أنت مستمر – كل يوم منجز له قيمة. واصل هكذا!",
+            "الاستمرارية أهم من الكمال. فقط استمر.",
+        ],
+    },
+    "hi": {
+        "perfect_week": [
+            "बेहतरीन सप्ताह! आपने हर तय दिन अपनी सभी आदतें पूरी कीं। 🏆",
+            "बिल्कुल सही! इस सप्ताह 100% - इससे बेहतर नहीं हो सकता। 🔥",
+        ],
+        "trend_up": [
+            "शानदार सप्ताह! आपकी पूर्णता दर {prev}% से बढ़कर {curr}% हो गई। 📈",
+            "बढ़ता रुझान: इस सप्ताह {curr}%, पिछले सप्ताह {prev}% था - ऐसे ही जारी रखें!",
+        ],
+        "trend_down": [
+            "यह सप्ताह थोड़ा शांत रहा ({curr}% की जगह {prev}%) - कोई बात नहीं, अगला सप्ताह नई शुरुआत है।",
+            "{prev}% से {curr}% तक - हर किसी का कभी कमज़ोर सप्ताह होता है। बस जारी रखना मायने रखता है।",
+        ],
+        "weekday_pattern": [
+            "{weekday} आपके लिए बाकी दिनों से मुश्किल लगते हैं - शायद किसी अलग समय पर रिमाइंडर मदद करे?",
+            "ध्यान दिया गया: आप {weekday} को सबसे कम आदतें पूरी करते हैं। इस पर सोचना उचित है।",
+        ],
+        "streak_highlight": [
+            "'{habit}' में आपकी लगातार श्रृंखला {streak} दिन की है - शानदार!",
+            "'{habit}' में लगातार {streak} दिन - प्रभावशाली!",
+        ],
+        "default": [
+            "आप जुटे हुए हैं - हर पूरा किया गया दिन मायने रखता है। ऐसे ही जारी रखें!",
+            "पूर्णता से ज़्यादा निरंतरता मायने रखती है। बस जारी रखें।",
+        ],
+    },
+    "zh": {
+        "perfect_week": [
+            "完美的一周！你在每个计划好的日子都完成了所有习惯。🏆",
+            "堪称完美！本周完成率100%，无可挑剔。🔥",
+        ],
+        "trend_up": [
+            "出色的一周！你的完成率从{prev}%提升到了{curr}%。📈",
+            "呈上升趋势：本周{curr}%，上周{prev}%，继续保持！",
+        ],
+        "trend_down": [
+            "这周稍显平静（{curr}%，而不是{prev}%）——没关系，下周重新开始。",
+            "从{prev}%到{curr}%——每个人都会有状态稍差的一周，坚持下去才是关键。",
+        ],
+        "weekday_pattern": [
+            "{weekday}对你来说似乎比其他日子更难坚持——换个提醒时间也许会有帮助？",
+            "注意到：你在{weekday}完成习惯的次数最少，值得思考一下原因。",
+        ],
+        "streak_highlight": [
+            "你在\"{habit}\"上的连续记录已经达到{streak}天——很棒！",
+            "「{habit}」连续坚持{streak}天——令人印象深刻。",
+        ],
+        "default": [
+            "你在坚持——每完成一天都很重要，继续加油！",
+            "持之以恒胜过完美，继续保持就好。",
+        ],
+    },
 }
 
 _WEEKDAY_NAMES = {
     "de": ["Montage", "Dienstage", "Mittwoche", "Donnerstage", "Freitage", "Samstage", "Sonntage"],
     "en": ["Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"],
+    "fr": ["lundis", "mardis", "mercredis", "jeudis", "vendredis", "samedis", "dimanches"],
+    "ar": ["أيام الاثنين", "أيام الثلاثاء", "أيام الأربعاء", "أيام الخميس", "أيام الجمعة", "أيام السبت", "أيام الأحد"],
+    "hi": ["सोमवार", "मंगलवार", "बुधवार", "गुरुवार", "शुक्रवार", "शनिवार", "रविवार"],
+    "zh": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
 }
 
 
@@ -441,7 +549,7 @@ def _possible_days_for_habit(habit: "Habit", start: date, end: date) -> int:
 
 
 def _generate_insight_for_user(user: "User", session: Session) -> Optional[str]:
-    lang = user.preferred_language if user.preferred_language in ("de", "en") else "en"
+    lang = user.preferred_language if user.preferred_language in ("de", "en", "fr", "ar", "hi", "zh") else "en"
     templates = _INSIGHT_TEMPLATES[lang]
     weekday_names = _WEEKDAY_NAMES[lang]
 
