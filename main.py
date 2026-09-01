@@ -297,7 +297,13 @@ def _send_push(token: str, title: str, body: str) -> bool:
             messaging.Message(
                 token=token,
                 notification=messaging.Notification(title=title, body=body),
-                android=messaging.AndroidConfig(priority="high"),
+                android=messaging.AndroidConfig(
+                    priority="high",
+                    notification=messaging.AndroidNotification(
+                        icon="ic_notification",
+                        color="#8B5CF6",
+                    ),
+                ),
             )
         )
         return True
@@ -1177,6 +1183,16 @@ def habit_stats(
     completion_rate = round((completions_in_period / possible_days) * 100)
     weeks_in_period = max(possible_days / 7, 1 / 7)
     avg_per_week = round(completions_in_period / weeks_in_period, 1)
+
+    # TEMPORÄR zum Debuggen: zeigt genau, was die Berechnung sieht, damit wir
+    # den 0%-Fehler bei der Erledigungsrate eingrenzen können. Vor der
+    # Veröffentlichung wieder entfernen.
+    print(
+        f"[DEBUG habit_stats] habit_id={habit_id} period={period} today={today} "
+        f"start={start} possible_days={possible_days} "
+        f"completions_in_period={completions_in_period} "
+        f"log_dates={[log.completed_on for log in logs]}"
+    )
 
     return {
         "period": period,
